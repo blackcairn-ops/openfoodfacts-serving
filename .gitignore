@@ -1,0 +1,15 @@
+# Build artifacts
+/foodfacts
+/foodfacts-*
+
+# DuckDB databases (regenerate via `ingest`)
+*.duckdb
+*.duckdb.wal
+
+# Downloaded parquet (use --keep-parquet to debug)
+/food.parquet
+/*.parquet.tmp
+
+# Local config
+.env
+.env.local
