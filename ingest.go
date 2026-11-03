@@ -26,6 +26,7 @@ const (
 //  1. output DuckDB path (ATTACH target)
 //  2. country filter array literal  e.g. ['en:united-kingdom','en:ireland']
 //  3. path to the downloaded parquet file
+//
 // ingestSQL is a multi-statement DuckDB script; %s substitution points:
 //  1. path to the downloaded parquet file
 //  2. country filter array literal  e.g. ['en:united-kingdom','en:ireland']
@@ -148,6 +149,20 @@ func cmdIngest(args []string) error {
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer db.Close()
+
+	// Ensure all DuckDB settings and ingestion use the same connection.
+	db.SetMaxOpenConns(1)
+
+	// Keep bulk ingestion from monopolising the host's resources.
+	if _, err := db.Exec("SET memory_limit = '2GB'"); err != nil {
+		return fmt.Errorf("set DuckDB memory limit: %w", err)
+	}
+	if _, err := db.Exec("SET threads = 2"); err != nil {
+		return fmt.Errorf("set DuckDB threads: %w", err)
+	}
+	if _, err := db.Exec("SET temp_directory = ?", *outDB+".tmp"); err != nil {
+		return fmt.Errorf("set DuckDB temp directory: %w", err)
+	}
 
 	countryArr := buildCountryArray(*countries)
 	query := fmt.Sprintf(ingestSQL, parquetPath, countryArr)
