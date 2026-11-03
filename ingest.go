@@ -26,6 +26,7 @@ const (
 //  1. output DuckDB path (ATTACH target)
 //  2. country filter array literal  e.g. ['en:united-kingdom','en:ireland']
 //  3. path to the downloaded parquet file
+//
 // ingestSQL is a multi-statement DuckDB script; %s substitution points:
 //  1. path to the downloaded parquet file
 //  2. country filter array literal  e.g. ['en:united-kingdom','en:ireland']
@@ -140,14 +141,32 @@ func cmdIngest(args []string) error {
 		return fmt.Errorf("download: %w", err)
 	}
 
-	// Remove any existing output DB so the CREATE OR REPLACE TABLE starts fresh.
-	_ = os.Remove(*outDB)
+	// Build a fresh database without touching the existing one.
+	// The staging file will be validated before replacing the live DB.
+	stagingDB := *outDB + ".staging"
+	if err := os.Remove(stagingDB); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale staging database: %w", err)
+	}
 
-	db, err := sql.Open("duckdb", *outDB)
+	db, err := sql.Open("duckdb", stagingDB)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer db.Close()
+
+	// Ensure all DuckDB settings and ingestion use the same connection.
+	db.SetMaxOpenConns(1)
+
+	// Keep bulk ingestion from monopolising the host's resources.
+	if _, err := db.Exec("SET memory_limit = '2GB'"); err != nil {
+		return fmt.Errorf("set DuckDB memory limit: %w", err)
+	}
+	if _, err := db.Exec("SET threads = 2"); err != nil {
+		return fmt.Errorf("set DuckDB threads: %w", err)
+	}
+	if _, err := db.Exec("SET temp_directory = ?", *outDB+".tmp"); err != nil {
+		return fmt.Errorf("set DuckDB temp directory: %w", err)
+	}
 
 	countryArr := buildCountryArray(*countries)
 	query := fmt.Sprintf(ingestSQL, parquetPath, countryArr)
@@ -159,13 +178,46 @@ func cmdIngest(args []string) error {
 	}
 	defer rows.Close()
 
-	// Print the row count from the final SELECT.
-	if rows.Next() {
-		var n int64
-		if err := rows.Scan(&n); err == nil {
-			slog.Info("ingest complete", "rows", n, "out_db", *outDB)
+	// Validate the result before promoting the staging database.
+	if !rows.Next() {
+		queryErr := rows.Err()
+		rows.Close()
+		if queryErr != nil {
+			return fmt.Errorf("read ingest count: %w", queryErr)
 		}
+		return fmt.Errorf("ingest returned no row count")
 	}
+
+	var count int64
+	if err := rows.Scan(&count); err != nil {
+		rows.Close()
+		return fmt.Errorf("scan ingest count: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("ingest result: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close ingest results: %w", err)
+	}
+	if count <= 0 {
+		return fmt.Errorf("ingest produced no products")
+	}
+
+	// Checkpoint and close DuckDB before replacing the live file.
+	if _, err := db.Exec("CHECKPOINT"); err != nil {
+		return fmt.Errorf("checkpoint staging database: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close staging database: %w", err)
+	}
+
+	// Staging and production files share a filesystem.
+	if err := os.Rename(stagingDB, *outDB); err != nil {
+		return fmt.Errorf("promote staging database: %w", err)
+	}
+
+	slog.Info("ingest complete", "rows", count, "out_db", *outDB)
 
 	if !*keepParquet {
 		if err := os.Remove(parquetPath); err != nil && !os.IsNotExist(err) {

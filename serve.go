@@ -200,7 +200,14 @@ func cmdServe(args []string) error {
 		if page < 1 {
 			page = 1
 		}
-		offset := (page - 1) * 20
+		pageSize, _ := strconv.Atoi(q.Get("page_size"))
+		if pageSize < 1 {
+			pageSize = 20
+		}
+		if pageSize > 100 {
+			pageSize = 100
+		}
+		offset := (page - 1) * pageSize
 
 		where, args := buildSearchWhere(query)
 
@@ -211,7 +218,7 @@ func cmdServe(args []string) error {
 			return
 		}
 
-		pageArgs := append(args, 20, offset) //nolint:gocritic // slice is local
+		pageArgs := append(args, pageSize, offset) //nolint:gocritic // slice is local
 		rows, err := db.Query("SELECT "+selectCols+" FROM products WHERE "+where+
 			" ORDER BY product_name LIMIT ? OFFSET ?", pageArgs...)
 		if err != nil {
@@ -221,7 +228,7 @@ func cmdServe(args []string) error {
 		}
 		defer rows.Close()
 
-		products := make([]product, 0, 20)
+		products := make([]product, 0, pageSize)
 		for rows.Next() {
 			p, err := scanProduct(rows)
 			if err != nil {
@@ -233,7 +240,7 @@ func cmdServe(args []string) error {
 		writeJSON(w, http.StatusOK, searchResponse{
 			Products: products,
 			Page:     page,
-			PageSize: 20,
+			PageSize: pageSize,
 			Count:    count,
 		})
 	})
