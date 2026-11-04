@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: foodfacts <serve|ingest>")
+		fmt.Fprintln(os.Stderr, "usage: foodfacts <serve|ingest|validate>")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -28,6 +28,11 @@ func main() {
 	case "ingest":
 		if err := cmdIngest(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "ingest:", err)
+			os.Exit(1)
+		}
+	case "validate":
+		if err := cmdValidate(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "validate:", err)
 			os.Exit(1)
 		}
 	default:
