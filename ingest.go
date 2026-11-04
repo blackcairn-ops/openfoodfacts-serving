@@ -122,6 +122,8 @@ func cmdIngest(args []string) error {
 		"comma-separated OFF country tags to include, e.g. en:united-kingdom,en:ireland")
 	outDB := fs.String("out", envOr("OFF_DB_PATH", defaultOutDB),
 		"output DuckDB file path")
+	stageOnly := fs.Bool("stage-only", false,
+		"build and validate a staging database without replacing the live database")
 	keepParquet := fs.Bool("keep-parquet", false,
 		"keep the downloaded parquet file after ingest (default: delete it)")
 	if err := fs.Parse(args); err != nil {
@@ -213,11 +215,18 @@ func cmdIngest(args []string) error {
 	}
 
 	// Staging and production files share a filesystem.
-	if err := os.Rename(stagingDB, *outDB); err != nil {
-		return fmt.Errorf("promote staging database: %w", err)
+	if !*stageOnly {
+		if err := os.Rename(stagingDB, *outDB); err != nil {
+			return fmt.Errorf("promote staging database: %w", err)
+		}
+
 	}
 
-	slog.Info("ingest complete", "rows", count, "out_db", *outDB)
+	resultPath := *outDB
+	if *stageOnly {
+		resultPath = stagingDB
+	}
+	slog.Info("ingest complete", "rows", count, "out_db", resultPath)
 
 	if !*keepParquet {
 		if err := os.Remove(parquetPath); err != nil && !os.IsNotExist(err) {
